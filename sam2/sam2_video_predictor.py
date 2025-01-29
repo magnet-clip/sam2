@@ -10,7 +10,11 @@ from collections import OrderedDict
 import torch
 import torch.nn.functional as F
 
-from tqdm import tqdm
+try:
+    __IPYTHON__
+    from tqdm.notebook import tqdm
+except:
+    from tqdm import tqdm
 
 from sam2.modeling.sam2_base import NO_OBJ_SCORE, SAM2Base
 from sam2.utils.misc import concat_points, fill_holes_in_mask_scores, load_video_frames
@@ -260,7 +264,13 @@ class SAM2VideoPredictor(SAM2Base):
             prev_sam_mask_logits = prev_out["pred_masks"].to(device, non_blocking=True)
             # Clamp the scale of prev_sam_mask_logits to avoid rare numerical issues.
             prev_sam_mask_logits = torch.clamp(prev_sam_mask_logits, -32.0, 32.0)
-        current_out, _ = self._run_single_frame_inference(
+        (
+            current_out,
+            pred_masks,
+            current_vision_feats,
+            current_vision_pos_embeds,
+            feat_sizes,
+        ) = self._run_single_frame_inference(
             inference_state=inference_state,
             output_dict=obj_output_dict,  # run on the slice of a single object
             frame_idx=frame_idx,
@@ -290,7 +300,15 @@ class SAM2VideoPredictor(SAM2Base):
         _, video_res_masks = self._get_orig_video_res_output(
             inference_state, consolidated_out["pred_masks_video_res"]
         )
-        return frame_idx, obj_ids, video_res_masks
+        return (
+            frame_idx,
+            obj_ids,
+            video_res_masks,
+            pred_masks,
+            current_vision_feats,
+            current_vision_pos_embeds,
+            feat_sizes,
+        )
 
     def add_new_points(self, *args, **kwargs):
         """Deprecated method. Please use `add_new_points_or_box` instead."""
@@ -600,7 +618,13 @@ class SAM2VideoPredictor(SAM2Base):
                         )
                 else:
                     storage_key = "non_cond_frame_outputs"
-                    current_out, pred_masks = self._run_single_frame_inference(
+                    (
+                        current_out,
+                        pred_masks,
+                        current_vision_feats,
+                        current_vision_pos_embeds,
+                        feat_sizes,
+                    ) = self._run_single_frame_inference(
                         inference_state=inference_state,
                         output_dict=obj_output_dict,
                         frame_idx=frame_idx,
@@ -627,7 +651,15 @@ class SAM2VideoPredictor(SAM2Base):
             _, video_res_masks = self._get_orig_video_res_output(
                 inference_state, all_pred_masks
             )
-            yield frame_idx, obj_ids, video_res_masks
+            yield (
+                frame_idx,
+                obj_ids,
+                video_res_masks,
+                pred_masks,
+                current_vision_feats,
+                current_vision_pos_embeds,
+                feat_sizes,
+            )
 
     @torch.inference_mode()
     def clear_all_prompts_in_frame(
@@ -800,7 +832,13 @@ class SAM2VideoPredictor(SAM2Base):
             "obj_ptr": obj_ptr,
             "object_score_logits": object_score_logits,
         }
-        return compact_current_out, pred_masks_gpu
+        return (
+            compact_current_out,
+            pred_masks_gpu,
+            current_vision_feats,
+            current_vision_pos_embeds,
+            feat_sizes,
+        )
 
     def _run_memory_encoder(
         self,
@@ -1205,7 +1243,9 @@ class SAM2VideoPredictorVOS(SAM2VideoPredictor):
         if self.sigmoid_bias_for_mem_enc != 0.0:
             mask_for_mem = mask_for_mem + self.sigmoid_bias_for_mem_enc
         maskmem_out = self.memory_encoder(
-            pix_feat, mask_for_mem, skip_mask_sigmoid=True  # sigmoid already applied
+            pix_feat,
+            mask_for_mem,
+            skip_mask_sigmoid=True,  # sigmoid already applied
         )
         # Clone the feats and pos_enc to enable compilation
         maskmem_features = maskmem_out["vision_features"].clone()

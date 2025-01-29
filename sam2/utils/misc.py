@@ -11,7 +11,12 @@ from threading import Thread
 import numpy as np
 import torch
 from PIL import Image
-from tqdm import tqdm
+
+try:
+    __IPYTHON__
+    from tqdm.notebook import tqdm
+except:
+    from tqdm import tqdm
 
 
 def get_sdpa_settings():
